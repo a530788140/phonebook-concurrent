@@ -16,7 +16,7 @@
 static double diff_in_second(struct timespec t1, struct timespec t2)
 {
     struct timespec diff;
-    if (t2.tv_nsec-t1.tv_nsec < 0) {
+    if (t2.tv_nsec - t1.tv_nsec < 0) {
         diff.tv_sec  = t2.tv_sec - t1.tv_sec - 1;
         diff.tv_nsec = t2.tv_nsec - t1.tv_nsec + 1000000000;
     } else {
@@ -83,8 +83,46 @@ int main(int argc, char *argv[])
 
     assert(entry_pool && "entry_pool error");
 
-    pthread_setconcurrency(THREAD_NUM + 1);
 
+#if defined THREADPOOL
+    extern threadpool_t *pool;
+    extern pthread_mutex_t lock;
+    pthread_mutex_init(&lock, NULL);
+    assert((pool = threadpool_create(THREAD_NUM, QUEUE, 0)) != NULL);
+    append_a **app = (append_a **) malloc(sizeof(append_a *) * THREAD_NUM);
+    for (int i = 0; i < THREAD_NUM; i++)
+        app[i] = new_append_a(map + MAX_LAST_NAME_SIZE * i, map + fs, i,
+                              THREAD_NUM, entry_pool + i);
+
+    for (int i = 0; i < THREAD_NUM; i++) {
+        threadpool_add(pool, &append, (void *)app[i] , 0);
+    }
+    assert(threadpool_destroy(pool, 1) == 0);
+    pthread_mutex_destroy(&lock);
+
+    entry *etmp;
+    pHead = pHead->pNext;
+    for (int i = 0; i < THREAD_NUM; i++) {
+        if (i == 0) {
+            pHead = app[i]->pHead->pNext;
+            dprintf("Connect %d head string %s %p\n", i,
+                    app[i]->pHead->pNext->lastName, app[i]->ptr);
+        } else {
+            etmp->pNext = app[i]->pHead->pNext;
+            dprintf("Connect %d head string %s %p\n", i,
+                    app[i]->pHead->pNext->lastName, app[i]->ptr);
+        }
+
+        etmp = app[i]->pLast;
+        dprintf("Connect %d tail string %s %p\n", i,
+                app[i]->pLast->lastName, app[i]->ptr);
+        dprintf("round %d\n", i);
+    }
+    clock_gettime(CLOCK_REALTIME, &end);
+    cpu_time1 = diff_in_second(start, end);
+
+#else
+    pthread_setconcurrency(THREAD_NUM);
     pthread_t *tid = (pthread_t *) malloc(sizeof(pthread_t) * THREAD_NUM);
     append_a **app = (append_a **) malloc(sizeof(append_a *) * THREAD_NUM);
     for (int i = 0; i < THREAD_NUM; i++)
@@ -119,6 +157,7 @@ int main(int argc, char *argv[])
 
     clock_gettime(CLOCK_REALTIME, &end);
     cpu_time1 = diff_in_second(start, end);
+#endif
 #else /* ! OPT */
     clock_gettime(CLOCK_REALTIME, &start);
     while (fgets(line, sizeof(line), fp)) {
@@ -159,7 +198,11 @@ int main(int argc, char *argv[])
 
     FILE *output;
 #if defined(OPT)
+#if defined THREADPOOL
+    output = fopen("threadpool.txt", "a");
+#else
     output = fopen("opt.txt", "a");
+#endif
 #else
     output = fopen("orig.txt", "a");
 #endif
@@ -174,7 +217,10 @@ int main(int argc, char *argv[])
     free(pHead);
 #else
     free(entry_pool);
+#if defined THREADPOOL
+#else
     free(tid);
+#endif
     free(app);
     munmap(map, fs);
 #endif
